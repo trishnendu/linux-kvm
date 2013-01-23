@@ -75,6 +75,11 @@ static void e820_setup(struct kvm *kvm)
 		.type		= E820_RESERVED,
 	};
 	mem_map[i++]	= (struct e820entry) {
+		.addr		= VGA_RAM_BEGIN,
+		.size		= VGA_ROM_BEGIN - VGA_RAM_BEGIN,
+		.type		= E820_RESERVED,
+	};
+	mem_map[i++]	= (struct e820entry) {
 		.addr		= MB_BIOS_BEGIN,
 		.size		= MB_BIOS_END - MB_BIOS_BEGIN,
 		.type		= E820_RESERVED,
