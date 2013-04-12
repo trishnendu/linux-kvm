@@ -6,6 +6,7 @@
 #include "kvm/kvm.h"
 #include "kvm/kvm-cpu.h"
 #include "kvm/vesa.h"
+#include "kvm/vga.h"
 
 #include <SDL/SDL.h>
 #include <pthread.h>
@@ -303,7 +304,10 @@ int sdl__init(struct kvm *kvm)
 	if (!kvm->cfg.sdl)
 		return 0;
 
-	fb = vesa__init(kvm);
+	if (true)
+		fb = vga_init(kvm);
+	else
+		fb = vesa__init(kvm);
 	if (IS_ERR(fb)) {
 		pr_err("vesa__init() failed with error %ld\n", PTR_ERR(fb));
 		return PTR_ERR(fb);

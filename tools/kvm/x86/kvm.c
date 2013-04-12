@@ -92,12 +92,27 @@ void kvm__init_ram(struct kvm *kvm)
 
 	if (kvm->ram_size < KVM_32BIT_GAP_START) {
 		/* Use a single block of RAM for 32bit RAM */
-
+#if 1
 		phys_start = 0;
-		phys_size  = kvm->ram_size;
+		phys_size  = 0xa0000;
 		host_mem   = kvm->ram_start;
 
 		kvm__register_mem(kvm, phys_start, phys_size, host_mem);
+
+		phys_start = 0xc0000;
+		phys_size  = kvm->ram_size - phys_start;
+		host_mem   = kvm->ram_start + phys_start;
+
+		kvm__register_mem(kvm, phys_start, phys_size, host_mem);
+#endif
+
+#if 0
+		phys_start = 0;
+		phys_size  = kvm->ram_size - phys_start;
+		host_mem   = kvm->ram_start + phys_start;
+
+		kvm__register_mem(kvm, phys_start, phys_size, host_mem);
+#endif
 	} else {
 		/* First RAM range from zero to the PCI gap: */
 

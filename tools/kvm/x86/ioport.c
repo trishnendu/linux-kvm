@@ -91,9 +91,5 @@ void ioport__setup_arch(struct kvm *kvm)
 	/* 0x00F0 - 0x00FF - Math co-processor */
 	ioport__register(kvm, 0x00F0, &dummy_write_only_ioport_ops, 2, NULL);
 
-	/* PORT 03D4-03D5 - COLOR VIDEO - CRT CONTROL REGISTERS */
-	ioport__register(kvm, 0x03D4, &dummy_read_write_ioport_ops, 1, NULL);
-	ioport__register(kvm, 0x03D5, &dummy_write_only_ioport_ops, 1, NULL);
-
 	ioport__register(kvm, 0x402, &seabios_debug_ops, 1, NULL);
 }

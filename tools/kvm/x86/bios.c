@@ -7,6 +7,11 @@
 #include <string.h>
 #include <asm/e820.h>
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <stdbool.h>
+#include <fcntl.h>
+
 #include "bios/bios-rom.h"
 
 struct irq_handler {
@@ -74,11 +79,13 @@ static void e820_setup(struct kvm *kvm)
 		.size		= VGA_RAM_BEGIN - EBDA_START,
 		.type		= E820_RESERVED,
 	};
+#if 1
 	mem_map[i++]	= (struct e820entry) {
 		.addr		= VGA_RAM_BEGIN,
 		.size		= VGA_ROM_BEGIN - VGA_RAM_BEGIN,
 		.type		= E820_RESERVED,
 	};
+#endif
 	mem_map[i++]	= (struct e820entry) {
 		.addr		= MB_BIOS_BEGIN,
 		.size		= MB_BIOS_END - MB_BIOS_BEGIN,
@@ -108,6 +115,31 @@ static void e820_setup(struct kvm *kvm)
 	e820->nr_map = i;
 }
 
+static bool load_vga_rom(struct kvm *kvm)
+{
+	struct stat st;
+	void *p;
+	int fd;
+	int nr;
+
+	fd = open("/home/asias/src/seabios/seabios/out/vgabios.bin", O_RDONLY);
+	if (fd < 0)
+		return false;
+
+	if (fstat(fd, &st))
+		return false;
+
+	if (st.st_size > MB_FIRMWARE_BIOS_SIZE)
+		die("firmware image %s is too big to fit in memory (%lu KB).\n", "vgabios", st.st_size / 1024);
+
+	p = guest_flat_to_host(kvm, VGA_ROM_OEM_STRING);
+
+	while ((nr = read(fd, p, st.st_size)) > 0)
+		p += nr;
+
+	return true;
+}
+
 static void setup_vga_rom(struct kvm *kvm)
 {
 	u16 *mode;
@@ -120,6 +152,8 @@ static void setup_vga_rom(struct kvm *kvm)
 	mode = guest_flat_to_host(kvm, VGA_ROM_MODES);
 	mode[0]	= 0x0112;
 	mode[1] = 0xffff;
+
+	load_vga_rom(kvm);
 }
 
 /**
@@ -133,25 +167,27 @@ void setup_bios(struct kvm *kvm)
 	unsigned int i;
 	void *p;
 
-	/*
-	 * before anything else -- clean some known areas
-	 * we definitely don't want any trash here
-	 */
-	p = guest_flat_to_host(kvm, BDA_START);
-	memset(p, 0, BDA_END - BDA_START);
+	if (!kvm->cfg.firmware_filename) {
+		/*
+		 * before anything else -- clean some known areas
+		 * we definitely don't want any trash here
+		 */
+		p = guest_flat_to_host(kvm, BDA_START);
+		memset(p, 0, BDA_END - BDA_START);
 
-	p = guest_flat_to_host(kvm, EBDA_START);
-	memset(p, 0, EBDA_END - EBDA_START);
+		p = guest_flat_to_host(kvm, EBDA_START);
+		memset(p, 0, EBDA_END - EBDA_START);
 
-	p = guest_flat_to_host(kvm, MB_BIOS_BEGIN);
-	memset(p, 0, MB_BIOS_END - MB_BIOS_BEGIN);
+		p = guest_flat_to_host(kvm, MB_BIOS_BEGIN);
+		memset(p, 0, MB_BIOS_END - MB_BIOS_BEGIN);
 
-	p = guest_flat_to_host(kvm, VGA_ROM_BEGIN);
-	memset(p, 0, VGA_ROM_END - VGA_ROM_BEGIN);
+		p = guest_flat_to_host(kvm, VGA_ROM_BEGIN);
+		memset(p, 0, VGA_ROM_END - VGA_ROM_BEGIN);
 
-	/* just copy the bios rom into the place */
-	p = guest_flat_to_host(kvm, MB_BIOS_BEGIN);
-	memcpy(p, bios_rom, bios_rom_size);
+		/* just copy the bios rom into the place */
+		p = guest_flat_to_host(kvm, MB_BIOS_BEGIN);
+		memcpy(p, bios_rom, bios_rom_size);
+	}
 
 	/* E820 memory map must be present */
 	e820_setup(kvm);
