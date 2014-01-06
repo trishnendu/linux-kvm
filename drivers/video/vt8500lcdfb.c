@@ -365,7 +365,7 @@ static int vt8500lcd_probe(struct platform_device *pdev)
 	if (!fb_mem_virt) {
 		pr_err("%s: Failed to allocate framebuffer\n", __func__);
 		return -ENOMEM;
-	};
+	}
 
 	fbi->fb.fix.smem_start	= fb_mem_phys;
 	fbi->fb.fix.smem_len	= fb_mem_len;
@@ -448,7 +448,6 @@ failed_free_io:
 failed_free_res:
 	release_mem_region(res->start, resource_size(res));
 failed_fbi:
-	platform_set_drvdata(pdev, NULL);
 	kfree(fbi);
 failed:
 	return ret;

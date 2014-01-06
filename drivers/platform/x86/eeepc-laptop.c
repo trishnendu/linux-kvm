@@ -190,16 +190,10 @@ struct eeepc_laptop {
  */
 static int write_acpi_int(acpi_handle handle, const char *method, int val)
 {
-	struct acpi_object_list params;
-	union acpi_object in_obj;
 	acpi_status status;
 
-	params.count = 1;
-	params.pointer = &in_obj;
-	in_obj.type = ACPI_TYPE_INTEGER;
-	in_obj.integer.value = val;
+	status = acpi_execute_simple_method(handle, (char *)method, val);
 
-	status = acpi_evaluate_object(handle, (char *)method, &params, NULL);
 	return (status == AE_OK ? 0 : -1);
 }
 
@@ -1269,7 +1263,6 @@ static void eeepc_acpi_notify(struct acpi_device *device, u32 event)
 	if (event > ACPI_MAX_SYS_NOTIFY)
 		return;
 	count = eeepc->event_count[event % 128]++;
-	acpi_bus_generate_proc_event(device, event, count);
 	acpi_bus_generate_netlink_event(device->pnp.device_class,
 					dev_name(&device->dev), event,
 					count);

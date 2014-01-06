@@ -147,7 +147,7 @@ err:
 
 static int led_pwm_probe(struct platform_device *pdev)
 {
-	struct led_pwm_platform_data *pdata = pdev->dev.platform_data;
+	struct led_pwm_platform_data *pdata = dev_get_platdata(&pdev->dev);
 	struct led_pwm_priv *priv;
 	int i, ret = 0;
 
@@ -232,7 +232,7 @@ static struct platform_driver led_pwm_driver = {
 	.driver		= {
 		.name	= "leds_pwm",
 		.owner	= THIS_MODULE,
-		.of_match_table = of_match_ptr(of_pwm_leds_match),
+		.of_match_table = of_pwm_leds_match,
 	},
 };
 

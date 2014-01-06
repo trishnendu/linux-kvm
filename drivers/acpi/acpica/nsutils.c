@@ -419,10 +419,12 @@ acpi_ns_externalize_name(u32 internal_name_length,
 
 	switch (internal_name[0]) {
 	case AML_ROOT_PREFIX:
+
 		prefix_length = 1;
 		break;
 
 	case AML_PARENT_PREFIX:
+
 		for (i = 0; i < internal_name_length; i++) {
 			if (ACPI_IS_PARENT_PREFIX(internal_name[i])) {
 				prefix_length = i + 1;
@@ -438,6 +440,7 @@ acpi_ns_externalize_name(u32 internal_name_length,
 		break;
 
 	default:
+
 		break;
 	}
 
@@ -719,7 +722,7 @@ acpi_ns_get_node(struct acpi_namespace_node *prefix_node,
 
 	(void)acpi_ut_release_mutex(ACPI_MTX_NAMESPACE);
 
-      cleanup:
+cleanup:
 	ACPI_FREE(internal_path);
 	return_ACPI_STATUS(status);
 }

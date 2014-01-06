@@ -128,7 +128,6 @@ struct mmc_omap_slot {
 
 struct mmc_omap_host {
 	int			initialized;
-	int			suspended;
 	struct mmc_request *	mrq;
 	struct mmc_command *	cmd;
 	struct mmc_data *	data;
@@ -1413,33 +1412,17 @@ static int mmc_omap_probe(struct platform_device *pdev)
 	else
 		sig = host->id == 0 ? OMAP_DMA_MMC_TX : OMAP_DMA_MMC2_TX;
 	host->dma_tx = dma_request_channel(mask, omap_dma_filter_fn, &sig);
-#if 0
-	if (!host->dma_tx) {
-		dev_err(host->dev, "unable to obtain TX DMA engine channel %u\n",
-			sig);
-		goto err_dma;
-	}
-#else
 	if (!host->dma_tx)
 		dev_warn(host->dev, "unable to obtain TX DMA engine channel %u\n",
 			sig);
-#endif
 	if (mmc_omap2())
 		sig = host->id == 0 ? OMAP24XX_DMA_MMC1_RX : OMAP24XX_DMA_MMC2_RX;
 	else
 		sig = host->id == 0 ? OMAP_DMA_MMC_RX : OMAP_DMA_MMC2_RX;
 	host->dma_rx = dma_request_channel(mask, omap_dma_filter_fn, &sig);
-#if 0
-	if (!host->dma_rx) {
-		dev_err(host->dev, "unable to obtain RX DMA engine channel %u\n",
-			sig);
-		goto err_dma;
-	}
-#else
 	if (!host->dma_rx)
 		dev_warn(host->dev, "unable to obtain RX DMA engine channel %u\n",
 			sig);
-#endif
 
 	ret = request_irq(host->irq, mmc_omap_irq, 0, DRIVER_NAME, host);
 	if (ret)
@@ -1500,8 +1483,6 @@ static int mmc_omap_remove(struct platform_device *pdev)
 	struct mmc_omap_host *host = platform_get_drvdata(pdev);
 	int i;
 
-	platform_set_drvdata(pdev, NULL);
-
 	BUG_ON(host == NULL);
 
 	for (i = 0; i < host->nr_slots; i++)
@@ -1531,61 +1512,9 @@ static int mmc_omap_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM
-static int mmc_omap_suspend(struct platform_device *pdev, pm_message_t mesg)
-{
-	int i, ret = 0;
-	struct mmc_omap_host *host = platform_get_drvdata(pdev);
-
-	if (host == NULL || host->suspended)
-		return 0;
-
-	for (i = 0; i < host->nr_slots; i++) {
-		struct mmc_omap_slot *slot;
-
-		slot = host->slots[i];
-		ret = mmc_suspend_host(slot->mmc);
-		if (ret < 0) {
-			while (--i >= 0) {
-				slot = host->slots[i];
-				mmc_resume_host(slot->mmc);
-			}
-			return ret;
-		}
-	}
-	host->suspended = 1;
-	return 0;
-}
-
-static int mmc_omap_resume(struct platform_device *pdev)
-{
-	int i, ret = 0;
-	struct mmc_omap_host *host = platform_get_drvdata(pdev);
-
-	if (host == NULL || !host->suspended)
-		return 0;
-
-	for (i = 0; i < host->nr_slots; i++) {
-		struct mmc_omap_slot *slot;
-		slot = host->slots[i];
-		ret = mmc_resume_host(slot->mmc);
-		if (ret < 0)
-			return ret;
-
-		host->suspended = 0;
-	}
-	return 0;
-}
-#else
-#define mmc_omap_suspend	NULL
-#define mmc_omap_resume		NULL
-#endif
-
 static struct platform_driver mmc_omap_driver = {
 	.probe		= mmc_omap_probe,
 	.remove		= mmc_omap_remove,
-	.suspend	= mmc_omap_suspend,
-	.resume		= mmc_omap_resume,
 	.driver		= {
 		.name	= DRIVER_NAME,
 		.owner	= THIS_MODULE,

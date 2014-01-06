@@ -564,7 +564,7 @@ static int efivar_sysfs_destroy(struct efivar_entry *entry, void *data)
 	return 0;
 }
 
-void efivars_sysfs_exit(void)
+static void efivars_sysfs_exit(void)
 {
 	/* Remove all entries and destroy */
 	__efivar_entry_iter(efivar_sysfs_destroy, &efivar_sysfs_list, NULL, NULL);
@@ -582,6 +582,9 @@ int efivars_sysfs_init(void)
 {
 	struct kobject *parent_kobj = efivars_kobject();
 	int error = 0;
+
+	if (!efi_enabled(EFI_RUNTIME_SERVICES))
+		return -ENODEV;
 
 	/* No efivars has been registered yet */
 	if (!parent_kobj)
