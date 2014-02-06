@@ -627,6 +627,7 @@ config KVMTOOL_TEST_ENABLE
 	select VIRTIO_BLK
 	select VIRTIO_CONSOLE
 	select VIRTIO_NET
+	select AVERAGE
 	select 9P_FS
 	select NET_9P
 	select NET_9P_VIRTIO
