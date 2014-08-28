@@ -69,6 +69,7 @@
 	__PCPU_DUMMY_ATTRS char __pcpu_scope_##name;			\
 	extern __PCPU_DUMMY_ATTRS char __pcpu_unique_##name;		\
 	__PCPU_DUMMY_ATTRS char __pcpu_unique_##name;			\
+	extern __PCPU_ATTRS(sec) __typeof__(type) name;			\
 	__PCPU_ATTRS(sec) PER_CPU_DEF_ATTRIBUTES __weak			\
 	__typeof__(type) name
 #else
@@ -145,10 +146,10 @@
  * Declaration/definition used for per-CPU variables that must be read mostly.
  */
 #define DECLARE_PER_CPU_READ_MOSTLY(type, name)			\
-	DECLARE_PER_CPU_SECTION(type, name, "..readmostly")
+	DECLARE_PER_CPU_SECTION(type, name, "..read_mostly")
 
 #define DEFINE_PER_CPU_READ_MOSTLY(type, name)				\
-	DEFINE_PER_CPU_SECTION(type, name, "..readmostly")
+	DEFINE_PER_CPU_SECTION(type, name, "..read_mostly")
 
 /*
  * Intermodule exports for per-CPU variables.  sparse forgets about

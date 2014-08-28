@@ -120,6 +120,7 @@ static int ima_measurements_show(struct seq_file *m, void *v)
 	struct ima_template_entry *e;
 	int namelen;
 	u32 pcr = CONFIG_IMA_MEASURE_PCR_IDX;
+	bool is_ima_template = false;
 	int i;
 
 	/* get entry */
@@ -132,27 +133,36 @@ static int ima_measurements_show(struct seq_file *m, void *v)
 	 * PCR used is always the same (config option) in
 	 * little-endian format
 	 */
-	ima_putc(m, &pcr, sizeof pcr);
+	ima_putc(m, &pcr, sizeof(pcr));
 
 	/* 2nd: template digest */
 	ima_putc(m, e->digest, TPM_DIGEST_SIZE);
 
 	/* 3rd: template name size */
 	namelen = strlen(e->template_desc->name);
-	ima_putc(m, &namelen, sizeof namelen);
+	ima_putc(m, &namelen, sizeof(namelen));
 
 	/* 4th:  template name */
 	ima_putc(m, e->template_desc->name, namelen);
 
 	/* 5th:  template length (except for 'ima' template) */
-	if (strcmp(e->template_desc->name, IMA_TEMPLATE_IMA_NAME) != 0)
+	if (strcmp(e->template_desc->name, IMA_TEMPLATE_IMA_NAME) == 0)
+		is_ima_template = true;
+
+	if (!is_ima_template)
 		ima_putc(m, &e->template_data_len,
 			 sizeof(e->template_data_len));
 
 	/* 6th:  template specific data */
 	for (i = 0; i < e->template_desc->num_fields; i++) {
-		e->template_desc->fields[i]->field_show(m, IMA_SHOW_BINARY,
-							&e->template_data[i]);
+		enum ima_show_type show = IMA_SHOW_BINARY;
+		struct ima_template_field *field = e->template_desc->fields[i];
+
+		if (is_ima_template && strcmp(field->field_id, "d") == 0)
+			show = IMA_SHOW_BINARY_NO_FIELD_LEN;
+		if (is_ima_template && strcmp(field->field_id, "n") == 0)
+			show = IMA_SHOW_BINARY_OLD_STRING_FMT;
+		field->field_show(m, show, &e->template_data[i]);
 	}
 	return 0;
 }
@@ -282,7 +292,7 @@ static atomic_t policy_opencount = ATOMIC_INIT(1);
 /*
  * ima_open_policy: sequentialize access to the policy file
  */
-static int ima_open_policy(struct inode * inode, struct file * filp)
+static int ima_open_policy(struct inode *inode, struct file *filp)
 {
 	/* No point in being allowed to open it if you aren't going to write */
 	if (!(filp->f_flags & O_WRONLY))

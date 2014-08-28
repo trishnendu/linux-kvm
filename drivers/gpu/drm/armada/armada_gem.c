@@ -172,8 +172,9 @@ armada_gem_linear_back(struct drm_device *dev, struct armada_gem_object *obj)
 		obj->dev_addr = obj->linear->start;
 	}
 
-	DRM_DEBUG_DRIVER("obj %p phys %#x dev %#x\n",
-			 obj, obj->phys_addr, obj->dev_addr);
+	DRM_DEBUG_DRIVER("obj %p phys %#llx dev %#llx\n", obj,
+			 (unsigned long long)obj->phys_addr,
+			 (unsigned long long)obj->dev_addr);
 
 	return 0;
 }
@@ -432,7 +433,6 @@ armada_gem_prime_map_dma_buf(struct dma_buf_attachment *attach,
 
 	if (dobj->obj.filp) {
 		struct address_space *mapping;
-		gfp_t gfp;
 		int count;
 
 		count = dobj->obj.size / PAGE_SIZE;
@@ -440,12 +440,11 @@ armada_gem_prime_map_dma_buf(struct dma_buf_attachment *attach,
 			goto free_sgt;
 
 		mapping = file_inode(dobj->obj.filp)->i_mapping;
-		gfp = mapping_gfp_mask(mapping);
 
 		for_each_sg(sgt->sgl, sg, count, i) {
 			struct page *page;
 
-			page = shmem_read_mapping_page_gfp(mapping, i, gfp);
+			page = shmem_read_mapping_page(mapping, i);
 			if (IS_ERR(page)) {
 				num = i;
 				goto release;
@@ -557,7 +556,6 @@ armada_gem_prime_import(struct drm_device *dev, struct dma_buf *buf)
 			 * refcount on the gem object itself.
 			 */
 			drm_gem_object_reference(obj);
-			dma_buf_put(buf);
 			return obj;
 		}
 	}
@@ -573,6 +571,7 @@ armada_gem_prime_import(struct drm_device *dev, struct dma_buf *buf)
 	}
 
 	dobj->obj.import_attach = attach;
+	get_dma_buf(buf);
 
 	/*
 	 * Don't call dma_buf_map_attachment() here - it maps the

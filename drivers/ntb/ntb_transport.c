@@ -56,7 +56,6 @@
 #include <linux/pci.h>
 #include <linux/slab.h>
 #include <linux/types.h>
-#include <linux/ntb.h>
 #include "ntb_hw.h"
 
 #define NTB_TRANSPORT_VERSION	3
@@ -107,8 +106,8 @@ struct ntb_transport_qp {
 	struct ntb_rx_info __iomem *rx_info;
 	struct ntb_rx_info *remote_rx_info;
 
-	void (*tx_handler) (struct ntb_transport_qp *qp, void *qp_data,
-			    void *data, int len);
+	void (*tx_handler)(struct ntb_transport_qp *qp, void *qp_data,
+			   void *data, int len);
 	struct list_head tx_free_q;
 	spinlock_t ntb_tx_free_q_lock;
 	void __iomem *tx_mw;
@@ -117,9 +116,8 @@ struct ntb_transport_qp {
 	unsigned int tx_max_entry;
 	unsigned int tx_max_frame;
 
-	void (*rx_handler) (struct ntb_transport_qp *qp, void *qp_data,
-			    void *data, int len);
-	struct tasklet_struct rx_work;
+	void (*rx_handler)(struct ntb_transport_qp *qp, void *qp_data,
+			   void *data, int len);
 	struct list_head rx_pend_q;
 	struct list_head rx_free_q;
 	spinlock_t ntb_rx_pend_q_lock;
@@ -130,7 +128,7 @@ struct ntb_transport_qp {
 	unsigned int rx_max_frame;
 	dma_cookie_t last_cookie;
 
-	void (*event_handler) (void *data, int status);
+	void (*event_handler)(void *data, int status);
 	struct delayed_work link_work;
 	struct work_struct link_cleanup;
 
@@ -481,7 +479,7 @@ static void ntb_list_add(spinlock_t *lock, struct list_head *entry,
 }
 
 static struct ntb_queue_entry *ntb_list_rm(spinlock_t *lock,
-						struct list_head *list)
+					   struct list_head *list)
 {
 	struct ntb_queue_entry *entry;
 	unsigned long flags;
@@ -584,11 +582,8 @@ static int ntb_set_mw(struct ntb_transport *nt, int num_mw, unsigned int size)
 	return 0;
 }
 
-static void ntb_qp_link_cleanup(struct work_struct *work)
+static void ntb_qp_link_cleanup(struct ntb_transport_qp *qp)
 {
-	struct ntb_transport_qp *qp = container_of(work,
-						   struct ntb_transport_qp,
-						   link_cleanup);
 	struct ntb_transport *nt = qp->transport;
 	struct pci_dev *pdev = ntb_query_pdev(nt->ndev);
 
@@ -602,6 +597,16 @@ static void ntb_qp_link_cleanup(struct work_struct *work)
 
 	dev_info(&pdev->dev, "qp %d: Link Down\n", qp->qp_num);
 	qp->qp_link = NTB_LINK_DOWN;
+}
+
+static void ntb_qp_link_cleanup_work(struct work_struct *work)
+{
+	struct ntb_transport_qp *qp = container_of(work,
+						   struct ntb_transport_qp,
+						   link_cleanup);
+	struct ntb_transport *nt = qp->transport;
+
+	ntb_qp_link_cleanup(qp);
 
 	if (nt->transport_link == NTB_LINK_UP)
 		schedule_delayed_work(&qp->link_work,
@@ -613,21 +618,19 @@ static void ntb_qp_link_down(struct ntb_transport_qp *qp)
 	schedule_work(&qp->link_cleanup);
 }
 
-static void ntb_transport_link_cleanup(struct work_struct *work)
+static void ntb_transport_link_cleanup(struct ntb_transport *nt)
 {
-	struct ntb_transport *nt = container_of(work, struct ntb_transport,
-						link_cleanup);
 	int i;
+
+	/* Pass along the info to any clients */
+	for (i = 0; i < nt->max_qps; i++)
+		if (!test_bit(i, &nt->qp_bitmap))
+			ntb_qp_link_cleanup(&nt->qps[i]);
 
 	if (nt->transport_link == NTB_LINK_DOWN)
 		cancel_delayed_work_sync(&nt->link_work);
 	else
 		nt->transport_link = NTB_LINK_DOWN;
-
-	/* Pass along the info to any clients */
-	for (i = 0; i < nt->max_qps; i++)
-		if (!test_bit(i, &nt->qp_bitmap))
-			ntb_qp_link_down(&nt->qps[i]);
 
 	/* The scratchpad registers keep the values if the remote side
 	 * goes down, blast them now to give them a sane value the next
@@ -635,6 +638,14 @@ static void ntb_transport_link_cleanup(struct work_struct *work)
 	 */
 	for (i = 0; i < MAX_SPAD; i++)
 		ntb_write_local_spad(nt->ndev, i, 0);
+}
+
+static void ntb_transport_link_cleanup_work(struct work_struct *work)
+{
+	struct ntb_transport *nt = container_of(work, struct ntb_transport,
+						link_cleanup);
+
+	ntb_transport_link_cleanup(nt);
 }
 
 static void ntb_transport_event_callback(void *data, enum ntb_hw_event event)
@@ -827,7 +838,7 @@ static void ntb_qp_link_work(struct work_struct *work)
 }
 
 static int ntb_transport_init_queue(struct ntb_transport *nt,
-				     unsigned int qp_num)
+				    unsigned int qp_num)
 {
 	struct ntb_transport_qp *qp;
 	unsigned int num_qps_mw, tx_size;
@@ -880,7 +891,7 @@ static int ntb_transport_init_queue(struct ntb_transport *nt,
 	}
 
 	INIT_DELAYED_WORK(&qp->link_work, ntb_qp_link_work);
-	INIT_WORK(&qp->link_cleanup, ntb_qp_link_cleanup);
+	INIT_WORK(&qp->link_cleanup, ntb_qp_link_cleanup_work);
 
 	spin_lock_init(&qp->ntb_rx_pend_q_lock);
 	spin_lock_init(&qp->ntb_rx_free_q_lock);
@@ -936,7 +947,7 @@ int ntb_transport_init(struct pci_dev *pdev)
 	}
 
 	INIT_DELAYED_WORK(&nt->link_work, ntb_transport_link_work);
-	INIT_WORK(&nt->link_cleanup, ntb_transport_link_cleanup);
+	INIT_WORK(&nt->link_cleanup, ntb_transport_link_cleanup_work);
 
 	rc = ntb_register_event_callback(nt->ndev,
 					 ntb_transport_event_callback);
@@ -972,7 +983,7 @@ void ntb_transport_free(void *transport)
 	struct ntb_device *ndev = nt->ndev;
 	int i;
 
-	nt->transport_link = NTB_LINK_DOWN;
+	ntb_transport_link_cleanup(nt);
 
 	/* verify that all the qp's are freed */
 	for (i = 0; i < nt->max_qps; i++) {
@@ -1043,7 +1054,7 @@ static void ntb_async_rx(struct ntb_queue_entry *entry, void *offset,
 	if (!chan)
 		goto err;
 
-	if (len < copy_bytes) 
+	if (len < copy_bytes)
 		goto err_wait;
 
 	device = chan->device;
@@ -1178,8 +1189,7 @@ out:
 	return 0;
 
 err:
-	ntb_list_add(&qp->ntb_rx_pend_q_lock, &entry->entry,
-		     &qp->rx_pend_q);
+	ntb_list_add(&qp->ntb_rx_pend_q_lock, &entry->entry, &qp->rx_pend_q);
 	/* Ensure that the data is fully copied out before clearing the flag */
 	wmb();
 	hdr->flags = 0;
@@ -1188,10 +1198,13 @@ err:
 	goto out;
 }
 
-static void ntb_transport_rx(unsigned long data)
+static int ntb_transport_rxc_db(void *data, int db_num)
 {
-	struct ntb_transport_qp *qp = (struct ntb_transport_qp *)data;
+	struct ntb_transport_qp *qp = data;
 	int rc, i;
+
+	dev_dbg(&ntb_query_pdev(qp->ndev)->dev, "%s: doorbell %d received\n",
+		__func__, db_num);
 
 	/* Limit the number of packets processed in a single interrupt to
 	 * provide fairness to others
@@ -1204,16 +1217,8 @@ static void ntb_transport_rx(unsigned long data)
 
 	if (qp->dma_chan)
 		dma_async_issue_pending(qp->dma_chan);
-}
 
-static void ntb_transport_rxc_db(void *data, int db_num)
-{
-	struct ntb_transport_qp *qp = data;
-
-	dev_dbg(&ntb_query_pdev(qp->ndev)->dev, "%s: doorbell %d received\n",
-		__func__, db_num);
-
-	tasklet_schedule(&qp->rx_work);
+	return i;
 }
 
 static void ntb_tx_copy_callback(void *data)
@@ -1432,11 +1437,12 @@ ntb_transport_create_queue(void *data, struct pci_dev *pdev,
 	qp->tx_handler = handlers->tx_handler;
 	qp->event_handler = handlers->event_handler;
 
+	dmaengine_get();
 	qp->dma_chan = dma_find_channel(DMA_MEMCPY);
-	if (!qp->dma_chan)
+	if (!qp->dma_chan) {
+		dmaengine_put();
 		dev_info(&pdev->dev, "Unable to allocate DMA channel, using CPU instead\n");
-	else
-		dmaengine_get();
+	}
 
 	for (i = 0; i < NTB_QP_DEF_NUM_ENTRIES; i++) {
 		entry = kzalloc(sizeof(struct ntb_queue_entry), GFP_ATOMIC);
@@ -1458,25 +1464,23 @@ ntb_transport_create_queue(void *data, struct pci_dev *pdev,
 			     &qp->tx_free_q);
 	}
 
-	tasklet_init(&qp->rx_work, ntb_transport_rx, (unsigned long) qp);
-
 	rc = ntb_register_db_callback(qp->ndev, free_queue, qp,
 				      ntb_transport_rxc_db);
 	if (rc)
-		goto err3;
+		goto err2;
 
 	dev_info(&pdev->dev, "NTB Transport QP %d created\n", qp->qp_num);
 
 	return qp;
 
-err3:
-	tasklet_disable(&qp->rx_work);
 err2:
 	while ((entry = ntb_list_rm(&qp->ntb_tx_free_q_lock, &qp->tx_free_q)))
 		kfree(entry);
 err1:
 	while ((entry = ntb_list_rm(&qp->ntb_rx_free_q_lock, &qp->rx_free_q)))
 		kfree(entry);
+	if (qp->dma_chan)
+		dmaengine_put();
 	set_bit(free_queue, &nt->qp_bitmap);
 err:
 	return NULL;
@@ -1515,7 +1519,6 @@ void ntb_transport_free_queue(struct ntb_transport_qp *qp)
 	}
 
 	ntb_unregister_db_callback(qp->ndev, qp->qp_num);
-	tasklet_disable(&qp->rx_work);
 
 	cancel_delayed_work_sync(&qp->link_work);
 

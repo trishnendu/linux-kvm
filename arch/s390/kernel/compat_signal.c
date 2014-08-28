@@ -194,7 +194,7 @@ static int restore_sigregs32(struct pt_regs *regs,_sigregs32 __user *sregs)
 		return -EINVAL;
 
 	/* Use regs->psw.mask instead of PSW_USER_BITS to preserve PER bit. */
-	regs->psw.mask = (regs->psw.mask & ~PSW_MASK_USER) |
+	regs->psw.mask = (regs->psw.mask & ~(PSW_MASK_USER | PSW_MASK_RI)) |
 		(__u64)(user_sregs.regs.psw.mask & PSW32_MASK_USER) << 32 |
 		(__u64)(user_sregs.regs.psw.mask & PSW32_MASK_RI) << 32 |
 		(__u64)(user_sregs.regs.psw.addr & PSW32_ADDR_AMODE);
@@ -213,7 +213,7 @@ static int restore_sigregs32(struct pt_regs *regs,_sigregs32 __user *sregs)
 	       sizeof(current->thread.fp_regs));
 
 	restore_fp_regs(current->thread.fp_regs.fprs);
-	clear_thread_flag(TIF_SYSCALL);	/* No longer in a system call */
+	clear_pt_regs_flag(regs, PIF_SYSCALL); /* No longer in a system call */
 	return 0;
 }
 
@@ -241,7 +241,7 @@ static int restore_sigregs_gprs_high(struct pt_regs *regs, __u32 __user *uregs)
 	return 0;
 }
 
-asmlinkage long sys32_sigreturn(void)
+COMPAT_SYSCALL_DEFINE0(sigreturn)
 {
 	struct pt_regs *regs = task_pt_regs(current);
 	sigframe32 __user *frame = (sigframe32 __user *)regs->gprs[15];
@@ -260,7 +260,7 @@ badframe:
 	return 0;
 }
 
-asmlinkage long sys32_rt_sigreturn(void)
+COMPAT_SYSCALL_DEFINE0(rt_sigreturn)
 {
 	struct pt_regs *regs = task_pt_regs(current);
 	rt_sigframe32 __user *frame = (rt_sigframe32 __user *)regs->gprs[15];
@@ -412,8 +412,9 @@ static int setup_rt_frame32(int sig, struct k_sigaction *ka, siginfo_t *info,
 		regs->gprs[14] = (__u64 __force) ka->sa.sa_restorer | PSW32_ADDR_AMODE;
 	} else {
 		regs->gprs[14] = (__u64 __force) frame->retcode | PSW32_ADDR_AMODE;
-		err |= __put_user(S390_SYSCALL_OPCODE | __NR_rt_sigreturn,
-				  (u16 __force __user *)(frame->retcode));
+		if (__put_user(S390_SYSCALL_OPCODE | __NR_rt_sigreturn,
+			       (u16 __force __user *)(frame->retcode)))
+			goto give_sigsegv;
 	}
 
 	/* Set up backchain. */

@@ -182,11 +182,8 @@ smb2_negotiate_wsize(struct cifs_tcon *tcon, struct smb_vol *volume_info)
 	/* start with specified wsize, or default */
 	wsize = volume_info->wsize ? volume_info->wsize : CIFS_DEFAULT_IOSIZE;
 	wsize = min_t(unsigned int, wsize, server->max_write);
-	/*
-	 * limit write size to 2 ** 16, because we don't support multicredit
-	 * requests now.
-	 */
-	wsize = min_t(unsigned int, wsize, 2 << 15);
+	/* set it to the maximum buffer size value we can send with 1 credit */
+	wsize = min_t(unsigned int, wsize, SMB2_MAX_BUFFER_SIZE);
 
 	return wsize;
 }
@@ -200,11 +197,8 @@ smb2_negotiate_rsize(struct cifs_tcon *tcon, struct smb_vol *volume_info)
 	/* start with specified rsize, or default */
 	rsize = volume_info->rsize ? volume_info->rsize : CIFS_DEFAULT_IOSIZE;
 	rsize = min_t(unsigned int, rsize, server->max_read);
-	/*
-	 * limit write size to 2 ** 16, because we don't support multicredit
-	 * requests now.
-	 */
-	rsize = min_t(unsigned int, rsize, 2 << 15);
+	/* set it to the maximum buffer size value we can send with 1 credit */
+	rsize = min_t(unsigned int, rsize, SMB2_MAX_BUFFER_SIZE);
 
 	return rsize;
 }
@@ -532,7 +526,10 @@ smb2_clone_range(const unsigned int xid,
 	int rc;
 	unsigned int ret_data_len;
 	struct copychunk_ioctl *pcchunk;
-	char *retbuf = NULL;
+	struct copychunk_ioctl_rsp *retbuf = NULL;
+	struct cifs_tcon *tcon;
+	int chunks_copied = 0;
+	bool chunk_sizes_updated = false;
 
 	pcchunk = kmalloc(sizeof(struct copychunk_ioctl), GFP_KERNEL);
 
@@ -547,27 +544,96 @@ smb2_clone_range(const unsigned int xid,
 
 	/* Note: request_res_key sets res_key null only if rc !=0 */
 	if (rc)
-		return rc;
+		goto cchunk_out;
 
 	/* For now array only one chunk long, will make more flexible later */
 	pcchunk->ChunkCount = __constant_cpu_to_le32(1);
 	pcchunk->Reserved = 0;
-	pcchunk->SourceOffset = cpu_to_le64(src_off);
-	pcchunk->TargetOffset = cpu_to_le64(dest_off);
-	pcchunk->Length = cpu_to_le32(len);
 	pcchunk->Reserved2 = 0;
 
-	/* Request that server copy to target from src file identified by key */
-	rc = SMB2_ioctl(xid, tlink_tcon(trgtfile->tlink),
-			trgtfile->fid.persistent_fid,
+	tcon = tlink_tcon(trgtfile->tlink);
+
+	while (len > 0) {
+		pcchunk->SourceOffset = cpu_to_le64(src_off);
+		pcchunk->TargetOffset = cpu_to_le64(dest_off);
+		pcchunk->Length =
+			cpu_to_le32(min_t(u32, len, tcon->max_bytes_chunk));
+
+		/* Request server copy to target from src identified by key */
+		rc = SMB2_ioctl(xid, tcon, trgtfile->fid.persistent_fid,
 			trgtfile->fid.volatile_fid, FSCTL_SRV_COPYCHUNK_WRITE,
 			true /* is_fsctl */, (char *)pcchunk,
-			sizeof(struct copychunk_ioctl),	&retbuf, &ret_data_len);
+			sizeof(struct copychunk_ioctl),	(char **)&retbuf,
+			&ret_data_len);
+		if (rc == 0) {
+			if (ret_data_len !=
+					sizeof(struct copychunk_ioctl_rsp)) {
+				cifs_dbg(VFS, "invalid cchunk response size\n");
+				rc = -EIO;
+				goto cchunk_out;
+			}
+			if (retbuf->TotalBytesWritten == 0) {
+				cifs_dbg(FYI, "no bytes copied\n");
+				rc = -EIO;
+				goto cchunk_out;
+			}
+			/*
+			 * Check if server claimed to write more than we asked
+			 */
+			if (le32_to_cpu(retbuf->TotalBytesWritten) >
+			    le32_to_cpu(pcchunk->Length)) {
+				cifs_dbg(VFS, "invalid copy chunk response\n");
+				rc = -EIO;
+				goto cchunk_out;
+			}
+			if (le32_to_cpu(retbuf->ChunksWritten) != 1) {
+				cifs_dbg(VFS, "invalid num chunks written\n");
+				rc = -EIO;
+				goto cchunk_out;
+			}
+			chunks_copied++;
 
-	/* BB need to special case rc = EINVAL to alter chunk size */
+			src_off += le32_to_cpu(retbuf->TotalBytesWritten);
+			dest_off += le32_to_cpu(retbuf->TotalBytesWritten);
+			len -= le32_to_cpu(retbuf->TotalBytesWritten);
 
-	cifs_dbg(FYI, "rc %d data length out %d\n", rc, ret_data_len);
+			cifs_dbg(FYI, "Chunks %d PartialChunk %d Total %d\n",
+				le32_to_cpu(retbuf->ChunksWritten),
+				le32_to_cpu(retbuf->ChunkBytesWritten),
+				le32_to_cpu(retbuf->TotalBytesWritten));
+		} else if (rc == -EINVAL) {
+			if (ret_data_len != sizeof(struct copychunk_ioctl_rsp))
+				goto cchunk_out;
 
+			cifs_dbg(FYI, "MaxChunks %d BytesChunk %d MaxCopy %d\n",
+				le32_to_cpu(retbuf->ChunksWritten),
+				le32_to_cpu(retbuf->ChunkBytesWritten),
+				le32_to_cpu(retbuf->TotalBytesWritten));
+
+			/*
+			 * Check if this is the first request using these sizes,
+			 * (ie check if copy succeed once with original sizes
+			 * and check if the server gave us different sizes after
+			 * we already updated max sizes on previous request).
+			 * if not then why is the server returning an error now
+			 */
+			if ((chunks_copied != 0) || chunk_sizes_updated)
+				goto cchunk_out;
+
+			/* Check that server is not asking us to grow size */
+			if (le32_to_cpu(retbuf->ChunkBytesWritten) <
+					tcon->max_bytes_chunk)
+				tcon->max_bytes_chunk =
+					le32_to_cpu(retbuf->ChunkBytesWritten);
+			else
+				goto cchunk_out; /* server gave us bogus size */
+
+			/* No need to change MaxChunks since already set to 1 */
+			chunk_sizes_updated = true;
+		}
+	}
+
+cchunk_out:
 	kfree(pcchunk);
 	return rc;
 }
@@ -839,6 +905,17 @@ smb2_query_symlink(const unsigned int xid, struct cifs_tcon *tcon,
 }
 
 static void
+smb2_downgrade_oplock(struct TCP_Server_Info *server,
+			struct cifsInodeInfo *cinode, bool set_level2)
+{
+	if (set_level2)
+		server->ops->set_oplock_level(cinode, SMB2_OPLOCK_LEVEL_II,
+						0, NULL);
+	else
+		server->ops->set_oplock_level(cinode, 0, 0, NULL);
+}
+
+static void
 smb2_set_oplock_level(struct cifsInodeInfo *cinode, __u32 oplock,
 		      unsigned int epoch, bool *purge_cache)
 {
@@ -970,6 +1047,7 @@ smb2_create_lease_buf(u8 *lease_key, u8 oplock)
 	buf->ccontext.NameOffset = cpu_to_le16(offsetof
 				(struct create_lease, Name));
 	buf->ccontext.NameLength = cpu_to_le16(4);
+	/* SMB2_CREATE_REQUEST_LEASE is "RqLs" */
 	buf->Name[0] = 'R';
 	buf->Name[1] = 'q';
 	buf->Name[2] = 'L';
@@ -996,6 +1074,7 @@ smb3_create_lease_buf(u8 *lease_key, u8 oplock)
 	buf->ccontext.NameOffset = cpu_to_le16(offsetof
 				(struct create_lease_v2, Name));
 	buf->ccontext.NameLength = cpu_to_le16(4);
+	/* SMB2_CREATE_REQUEST_LEASE is "RqLs" */
 	buf->Name[0] = 'R';
 	buf->Name[1] = 'q';
 	buf->Name[2] = 'L';
@@ -1044,6 +1123,7 @@ struct smb_version_operations smb20_operations = {
 	.clear_stats = smb2_clear_stats,
 	.print_stats = smb2_print_stats,
 	.is_oplock_break = smb2_is_valid_oplock_break,
+	.downgrade_oplock = smb2_downgrade_oplock,
 	.need_neg = smb2_need_neg,
 	.negotiate = smb2_negotiate,
 	.negotiate_wsize = smb2_negotiate_wsize,
@@ -1118,6 +1198,7 @@ struct smb_version_operations smb21_operations = {
 	.clear_stats = smb2_clear_stats,
 	.print_stats = smb2_print_stats,
 	.is_oplock_break = smb2_is_valid_oplock_break,
+	.downgrade_oplock = smb2_downgrade_oplock,
 	.need_neg = smb2_need_neg,
 	.negotiate = smb2_negotiate,
 	.negotiate_wsize = smb2_negotiate_wsize,
@@ -1193,6 +1274,7 @@ struct smb_version_operations smb30_operations = {
 	.print_stats = smb2_print_stats,
 	.dump_share_caps = smb2_dump_share_caps,
 	.is_oplock_break = smb2_is_valid_oplock_break,
+	.downgrade_oplock = smb2_downgrade_oplock,
 	.need_neg = smb2_need_neg,
 	.negotiate = smb2_negotiate,
 	.negotiate_wsize = smb2_negotiate_wsize,
@@ -1247,6 +1329,7 @@ struct smb_version_operations smb30_operations = {
 	.create_lease_buf = smb3_create_lease_buf,
 	.parse_lease_buf = smb3_parse_lease_buf,
 	.clone_range = smb2_clone_range,
+	.validate_negotiate = smb3_validate_negotiate,
 };
 
 struct smb_version_values smb20_values = {

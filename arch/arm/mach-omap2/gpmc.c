@@ -68,6 +68,9 @@
 #define	GPMC_ECC_BCH_RESULT_1	0x244	/* not available on OMAP2 */
 #define	GPMC_ECC_BCH_RESULT_2	0x248	/* not available on OMAP2 */
 #define	GPMC_ECC_BCH_RESULT_3	0x24c	/* not available on OMAP2 */
+#define	GPMC_ECC_BCH_RESULT_4	0x300	/* not available on OMAP2 */
+#define	GPMC_ECC_BCH_RESULT_5	0x304	/* not available on OMAP2 */
+#define	GPMC_ECC_BCH_RESULT_6	0x308	/* not available on OMAP2 */
 
 /* GPMC ECC control settings */
 #define GPMC_ECC_CTRL_ECCCLEAR		0x100
@@ -170,12 +173,12 @@ static irqreturn_t gpmc_handle_irq(int irq, void *dev);
 
 static void gpmc_write_reg(int idx, u32 val)
 {
-	__raw_writel(val, gpmc_base + idx);
+	writel_relaxed(val, gpmc_base + idx);
 }
 
 static u32 gpmc_read_reg(int idx)
 {
-	return __raw_readl(gpmc_base + idx);
+	return readl_relaxed(gpmc_base + idx);
 }
 
 void gpmc_cs_write_reg(int cs, int idx, u32 val)
@@ -183,7 +186,7 @@ void gpmc_cs_write_reg(int cs, int idx, u32 val)
 	void __iomem *reg_addr;
 
 	reg_addr = gpmc_base + GPMC_CS0_OFFSET + (cs * GPMC_CS_SIZE) + idx;
-	__raw_writel(val, reg_addr);
+	writel_relaxed(val, reg_addr);
 }
 
 static u32 gpmc_cs_read_reg(int cs, int idx)
@@ -191,7 +194,7 @@ static u32 gpmc_cs_read_reg(int cs, int idx)
 	void __iomem *reg_addr;
 
 	reg_addr = gpmc_base + GPMC_CS0_OFFSET + (cs * GPMC_CS_SIZE) + idx;
-	return __raw_readl(reg_addr);
+	return readl_relaxed(reg_addr);
 }
 
 /* TODO: Add support for gpmc_fck to clock framework and use it */
@@ -501,7 +504,7 @@ static int gpmc_cs_delete_mem(int cs)
 	int r;
 
 	spin_lock(&gpmc_mem_lock);
-	r = release_resource(&gpmc_cs_mem[cs]);
+	r = release_resource(res);
 	res->start = 0;
 	res->end = 0;
 	spin_unlock(&gpmc_mem_lock);
@@ -527,6 +530,14 @@ static int gpmc_cs_remap(int cs, u32 base)
 		pr_err("%s: requested chip-select is disabled\n", __func__);
 		return -ENODEV;
 	}
+
+	/*
+	 * Make sure we ignore any device offsets from the GPMC partition
+	 * allocated for the chip select and that the new base confirms
+	 * to the GPMC 16MB minimum granularity.
+	 */ 
+	base &= ~(SZ_16M - 1);
+
 	gpmc_cs_get_memconf(cs, &old_base, &size);
 	if (base == old_base)
 		return 0;
@@ -586,6 +597,8 @@ EXPORT_SYMBOL(gpmc_cs_request);
 
 void gpmc_cs_free(int cs)
 {
+	struct resource	*res = &gpmc_cs_mem[cs];
+
 	spin_lock(&gpmc_mem_lock);
 	if (cs >= gpmc_cs_num || cs < 0 || !gpmc_cs_reserved(cs)) {
 		printk(KERN_ERR "Trying to free non-reserved GPMC CS%d\n", cs);
@@ -594,7 +607,8 @@ void gpmc_cs_free(int cs)
 		return;
 	}
 	gpmc_cs_disable_mem(cs);
-	release_resource(&gpmc_cs_mem[cs]);
+	if (res->flags)
+		release_resource(res);
 	gpmc_cs_set_reserved(cs, 0);
 	spin_unlock(&gpmc_mem_lock);
 }
@@ -666,6 +680,12 @@ void gpmc_update_nand_reg(struct gpmc_nand_regs *reg, int cs)
 					   GPMC_BCH_SIZE * i;
 		reg->gpmc_bch_result3[i] = gpmc_base + GPMC_ECC_BCH_RESULT_3 +
 					   GPMC_BCH_SIZE * i;
+		reg->gpmc_bch_result4[i] = gpmc_base + GPMC_ECC_BCH_RESULT_4 +
+					   i * GPMC_BCH_SIZE;
+		reg->gpmc_bch_result5[i] = gpmc_base + GPMC_ECC_BCH_RESULT_5 +
+					   i * GPMC_BCH_SIZE;
+		reg->gpmc_bch_result6[i] = gpmc_base + GPMC_ECC_BCH_RESULT_6 +
+					   i * GPMC_BCH_SIZE;
 	}
 }
 
@@ -1339,7 +1359,7 @@ static void __maybe_unused gpmc_read_timings_dt(struct device_node *np,
 		of_property_read_bool(np, "gpmc,time-para-granularity");
 }
 
-#ifdef CONFIG_MTD_NAND
+#if IS_ENABLED(CONFIG_MTD_NAND)
 
 static const char * const nand_xfer_types[] = {
 	[NAND_OMAP_PREFETCH_POLLED]		= "prefetch-polled",
@@ -1401,6 +1421,12 @@ static int gpmc_probe_nand_child(struct platform_device *pdev,
 		else
 			gpmc_nand_data->ecc_opt =
 				OMAP_ECC_BCH8_CODE_HW_DETECTION_SW;
+	else if (!strcmp(s, "bch16"))
+		if (gpmc_nand_data->elm_of_node)
+			gpmc_nand_data->ecc_opt =
+				OMAP_ECC_BCH16_CODE_HW;
+		else
+			pr_err("%s: BCH16 requires ELM support\n", __func__);
 	else
 		pr_err("%s: ti,nand-ecc-opt invalid value\n", __func__);
 
@@ -1429,7 +1455,7 @@ static int gpmc_probe_nand_child(struct platform_device *pdev,
 }
 #endif
 
-#ifdef CONFIG_MTD_ONENAND
+#if IS_ENABLED(CONFIG_MTD_ONENAND)
 static int gpmc_probe_onenand_child(struct platform_device *pdev,
 				 struct device_node *child)
 {
@@ -1502,6 +1528,22 @@ static int gpmc_probe_generic_child(struct platform_device *pdev,
 	}
 
 	/*
+	 * For some GPMC devices we still need to rely on the bootloader
+	 * timings because the devices can be connected via FPGA. So far
+	 * the list is smc91x on the omap2 SDP boards, and 8250 on zooms.
+	 * REVISIT: Add timing support from slls644g.pdf and from the
+	 * lan91c96 manual.
+	 */
+	if (of_device_is_compatible(child, "ns16550a") ||
+	    of_device_is_compatible(child, "smsc,lan91c94") ||
+	    of_device_is_compatible(child, "smsc,lan91c111")) {
+		dev_warn(&pdev->dev,
+			 "%s using bootloader timings on CS%d\n",
+			 child->name, cs);
+		goto no_timings;
+	}
+
+	/*
 	 * FIXME: gpmc_cs_request() will map the CS to an arbitary
 	 * location in the gpmc address space. When booting with
 	 * device-tree we want the NOR flash to be mapped to the
@@ -1529,6 +1571,7 @@ static int gpmc_probe_generic_child(struct platform_device *pdev,
 	gpmc_read_timings_dt(child, &gpmc_t);
 	gpmc_cs_set_timings(cs, &gpmc_t);
 
+no_timings:
 	if (of_platform_device_create(child, NULL, &pdev->dev))
 		return 0;
 
@@ -1539,42 +1582,6 @@ err:
 	gpmc_cs_free(cs);
 
 	return ret;
-}
-
-/*
- * REVISIT: Add timing support from slls644g.pdf
- */
-static int gpmc_probe_8250(struct platform_device *pdev,
-				struct device_node *child)
-{
-	struct resource res;
-	unsigned long base;
-	int ret, cs;
-
-	if (of_property_read_u32(child, "reg", &cs) < 0) {
-		dev_err(&pdev->dev, "%s has no 'reg' property\n",
-			child->full_name);
-		return -ENODEV;
-	}
-
-	if (of_address_to_resource(child, 0, &res) < 0) {
-		dev_err(&pdev->dev, "%s has malformed 'reg' property\n",
-			child->full_name);
-		return -ENODEV;
-	}
-
-	ret = gpmc_cs_request(cs, resource_size(&res), &base);
-	if (ret < 0) {
-		dev_err(&pdev->dev, "cannot request GPMC CS %d\n", cs);
-		return ret;
-	}
-
-	if (of_platform_device_create(child, NULL, &pdev->dev))
-		return 0;
-
-	dev_err(&pdev->dev, "failed to create gpmc child %s\n", child->name);
-
-	return -ENODEV;
 }
 
 static int gpmc_probe_dt(struct platform_device *pdev)
@@ -1608,7 +1615,7 @@ static int gpmc_probe_dt(struct platform_device *pdev)
 		return ret;
 	}
 
-	for_each_child_of_node(pdev->dev.of_node, child) {
+	for_each_available_child_of_node(pdev->dev.of_node, child) {
 
 		if (!child->name)
 			continue;
@@ -1618,10 +1625,9 @@ static int gpmc_probe_dt(struct platform_device *pdev)
 		else if (of_node_cmp(child->name, "onenand") == 0)
 			ret = gpmc_probe_onenand_child(pdev, child);
 		else if (of_node_cmp(child->name, "ethernet") == 0 ||
-			 of_node_cmp(child->name, "nor") == 0)
+			 of_node_cmp(child->name, "nor") == 0 ||
+			 of_node_cmp(child->name, "uart") == 0)
 			ret = gpmc_probe_generic_child(pdev, child);
-		else if (of_node_cmp(child->name, "8250") == 0)
-			ret = gpmc_probe_8250(pdev, child);
 
 		if (WARN(ret < 0, "%s: probing gpmc child %s failed\n",
 			 __func__, child->full_name))

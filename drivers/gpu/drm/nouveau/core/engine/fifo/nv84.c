@@ -35,6 +35,7 @@
 #include <engine/dmaobj.h>
 #include <engine/fifo.h>
 
+#include "nv04.h"
 #include "nv50.h"
 
 /*******************************************************************************
@@ -388,14 +389,14 @@ nv84_fifo_cclass = {
  ******************************************************************************/
 
 static void
-nv84_fifo_uevent_enable(struct nouveau_event *event, int index)
+nv84_fifo_uevent_enable(struct nouveau_event *event, int type, int index)
 {
 	struct nv84_fifo_priv *priv = event->priv;
 	nv_mask(priv, 0x002140, 0x40000000, 0x40000000);
 }
 
 static void
-nv84_fifo_uevent_disable(struct nouveau_event *event, int index)
+nv84_fifo_uevent_disable(struct nouveau_event *event, int type, int index)
 {
 	struct nv84_fifo_priv *priv = event->priv;
 	nv_mask(priv, 0x002140, 0x40000000, 0x00000000);
@@ -432,6 +433,8 @@ nv84_fifo_ctor(struct nouveau_object *parent, struct nouveau_object *engine,
 	nv_subdev(priv)->intr = nv04_fifo_intr;
 	nv_engine(priv)->cclass = &nv84_fifo_cclass;
 	nv_engine(priv)->sclass = nv84_fifo_sclass;
+	priv->base.pause = nv04_fifo_pause;
+	priv->base.start = nv04_fifo_start;
 	return 0;
 }
 

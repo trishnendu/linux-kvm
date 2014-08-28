@@ -93,10 +93,12 @@ void dce6_afmt_select_pin(struct drm_encoder *encoder)
 	struct radeon_device *rdev = encoder->dev->dev_private;
 	struct radeon_encoder *radeon_encoder = to_radeon_encoder(encoder);
 	struct radeon_encoder_atom_dig *dig = radeon_encoder->enc_priv;
-	u32 offset = dig->afmt->offset;
+	u32 offset;
 
-	if (!dig->afmt->pin)
+	if (!dig || !dig->afmt || !dig->afmt->pin)
 		return;
+
+	offset = dig->afmt->offset;
 
 	WREG32(AFMT_AUDIO_SRC_CONTROL + offset,
 	       AFMT_AUDIO_SRC_SELECT(dig->afmt->pin->id));
@@ -112,7 +114,7 @@ void dce6_afmt_write_latency_fields(struct drm_encoder *encoder,
 	struct radeon_connector *radeon_connector = NULL;
 	u32 tmp = 0, offset;
 
-	if (!dig->afmt->pin)
+	if (!dig || !dig->afmt || !dig->afmt->pin)
 		return;
 
 	offset = dig->afmt->pin->offset;
@@ -156,7 +158,7 @@ void dce6_afmt_write_speaker_allocation(struct drm_encoder *encoder)
 	u8 *sadb;
 	int sad_count;
 
-	if (!dig->afmt->pin)
+	if (!dig || !dig->afmt || !dig->afmt->pin)
 		return;
 
 	offset = dig->afmt->pin->offset;
@@ -172,7 +174,7 @@ void dce6_afmt_write_speaker_allocation(struct drm_encoder *encoder)
 	}
 
 	sad_count = drm_edid_to_speaker_allocation(radeon_connector->edid, &sadb);
-	if (sad_count < 0) {
+	if (sad_count <= 0) {
 		DRM_ERROR("Couldn't read Speaker Allocation Data Block: %d\n", sad_count);
 		return;
 	}
@@ -217,7 +219,7 @@ void dce6_afmt_write_sad_regs(struct drm_encoder *encoder)
 		{ AZ_F0_CODEC_PIN_CONTROL_AUDIO_DESCRIPTOR13, HDMI_AUDIO_CODING_TYPE_WMA_PRO },
 	};
 
-	if (!dig->afmt->pin)
+	if (!dig || !dig->afmt || !dig->afmt->pin)
 		return;
 
 	offset = dig->afmt->pin->offset;
@@ -233,7 +235,7 @@ void dce6_afmt_write_sad_regs(struct drm_encoder *encoder)
 	}
 
 	sad_count = drm_edid_to_sad(radeon_connector->edid, &sads);
-	if (sad_count < 0) {
+	if (sad_count <= 0) {
 		DRM_ERROR("Couldn't read SADs: %d\n", sad_count);
 		return;
 	}
@@ -276,13 +278,15 @@ static int dce6_audio_chipset_supported(struct radeon_device *rdev)
 	return !ASIC_IS_NODCE(rdev);
 }
 
-static void dce6_audio_enable(struct radeon_device *rdev,
-			      struct r600_audio_pin *pin,
-			      bool enable)
+void dce6_audio_enable(struct radeon_device *rdev,
+		       struct r600_audio_pin *pin,
+		       bool enable)
 {
+	if (!pin)
+		return;
+
 	WREG32_ENDPOINT(pin->offset, AZ_F0_CODEC_PIN_CONTROL_HOTPLUG_CONTROL,
-			AUDIO_ENABLED);
-	DRM_INFO("%s audio %d support\n", enable ? "Enabling" : "Disabling", pin->id);
+			enable ? AUDIO_ENABLED : 0);
 }
 
 static const u32 pin_offsets[7] =
@@ -305,9 +309,17 @@ int dce6_audio_init(struct radeon_device *rdev)
 
 	rdev->audio.enabled = true;
 
-	if (ASIC_IS_DCE8(rdev))
+	if (ASIC_IS_DCE81(rdev)) /* KV: 4 streams, 7 endpoints */
 		rdev->audio.num_pins = 7;
-	else
+	else if (ASIC_IS_DCE83(rdev)) /* KB: 2 streams, 3 endpoints */
+		rdev->audio.num_pins = 3;
+	else if (ASIC_IS_DCE8(rdev)) /* BN/HW: 6 streams, 7 endpoints */
+		rdev->audio.num_pins = 7;
+	else if (ASIC_IS_DCE61(rdev)) /* TN: 4 streams, 6 endpoints */
+		rdev->audio.num_pins = 6;
+	else if (ASIC_IS_DCE64(rdev)) /* OL: 2 streams, 2 endpoints */
+		rdev->audio.num_pins = 2;
+	else /* SI: 6 streams, 6 endpoints */
 		rdev->audio.num_pins = 6;
 
 	for (i = 0; i < rdev->audio.num_pins; i++) {
@@ -319,7 +331,8 @@ int dce6_audio_init(struct radeon_device *rdev)
 		rdev->audio.pin[i].connected = false;
 		rdev->audio.pin[i].offset = pin_offsets[i];
 		rdev->audio.pin[i].id = i;
-		dce6_audio_enable(rdev, &rdev->audio.pin[i], true);
+		/* disable audio.  it will be set up later */
+		dce6_audio_enable(rdev, &rdev->audio.pin[i], false);
 	}
 
 	return 0;

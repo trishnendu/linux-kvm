@@ -275,6 +275,10 @@ xfs_trans_read_buf_map(
 			XFS_BUF_UNDONE(bp);
 			xfs_buf_stale(bp);
 			xfs_buf_relse(bp);
+
+			/* bad CRC means corrupted metadata */
+			if (error == EFSBADCRC)
+				error = EFSCORRUPTED;
 			return error;
 		}
 #ifdef DEBUG
@@ -314,7 +318,18 @@ xfs_trans_read_buf_map(
 			ASSERT(bp->b_iodone == NULL);
 			XFS_BUF_READ(bp);
 			bp->b_ops = ops;
-			xfsbdstrat(tp->t_mountp, bp);
+
+			/*
+			 * XXX(hch): clean up the error handling here to be less
+			 * of a mess..
+			 */
+			if (XFS_FORCED_SHUTDOWN(mp)) {
+				trace_xfs_bdstrat_shut(bp, _RET_IP_);
+				xfs_bioerror_relse(bp);
+			} else {
+				xfs_buf_iorequest(bp);
+			}
+
 			error = xfs_buf_iowait(bp);
 			if (error) {
 				xfs_buf_ioerror_alert(bp, __func__);
@@ -327,6 +342,9 @@ xfs_trans_read_buf_map(
 				if (tp->t_flags & XFS_TRANS_DIRTY)
 					xfs_force_shutdown(tp->t_mountp,
 							SHUTDOWN_META_IO_ERROR);
+				/* bad CRC means corrupted metadata */
+				if (error == EFSBADCRC)
+					error = EFSCORRUPTED;
 				return error;
 			}
 		}
@@ -364,6 +382,10 @@ xfs_trans_read_buf_map(
 		if (tp->t_flags & XFS_TRANS_DIRTY)
 			xfs_force_shutdown(tp->t_mountp, SHUTDOWN_META_IO_ERROR);
 		xfs_buf_relse(bp);
+
+		/* bad CRC means corrupted metadata */
+		if (error == EFSBADCRC)
+			error = EFSCORRUPTED;
 		return error;
 	}
 #ifdef DEBUG

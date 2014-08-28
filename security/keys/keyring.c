@@ -160,7 +160,7 @@ static u64 mult_64x32_and_fold(u64 x, u32 y)
 static unsigned long hash_key_type_and_desc(const struct keyring_index_key *index_key)
 {
 	const unsigned level_shift = ASSOC_ARRAY_LEVEL_STEP;
-	const unsigned long level_mask = ASSOC_ARRAY_LEVEL_STEP_MASK;
+	const unsigned long fan_mask = ASSOC_ARRAY_FAN_MASK;
 	const char *description = index_key->description;
 	unsigned long hash, type;
 	u32 piece;
@@ -194,10 +194,10 @@ static unsigned long hash_key_type_and_desc(const struct keyring_index_key *inde
 	 * ordinary keys by making sure the lowest level segment in the hash is
 	 * zero for keyrings and non-zero otherwise.
 	 */
-	if (index_key->type != &key_type_keyring && (hash & level_mask) == 0)
+	if (index_key->type != &key_type_keyring && (hash & fan_mask) == 0)
 		return hash | (hash >> (ASSOC_ARRAY_KEY_CHUNK_SIZE - level_shift)) | 1;
-	if (index_key->type == &key_type_keyring && (hash & level_mask) != 0)
-		return (hash + (hash << level_shift)) & ~level_mask;
+	if (index_key->type == &key_type_keyring && (hash & fan_mask) != 0)
+		return (hash + (hash << level_shift)) & ~fan_mask;
 	return hash;
 }
 
@@ -279,12 +279,11 @@ static bool keyring_compare_object(const void *object, const void *data)
  * Compare the index keys of a pair of objects and determine the bit position
  * at which they differ - if they differ.
  */
-static int keyring_diff_objects(const void *_a, const void *_b)
+static int keyring_diff_objects(const void *object, const void *data)
 {
-	const struct key *key_a = keyring_ptr_to_key(_a);
-	const struct key *key_b = keyring_ptr_to_key(_b);
+	const struct key *key_a = keyring_ptr_to_key(object);
 	const struct keyring_index_key *a = &key_a->index_key;
-	const struct keyring_index_key *b = &key_b->index_key;
+	const struct keyring_index_key *b = data;
 	unsigned long seg_a, seg_b;
 	int level, i;
 
@@ -542,7 +541,7 @@ static int keyring_search_iterator(const void *object, void *iterator_data)
 	/* key must have search permissions */
 	if (!(ctx->flags & KEYRING_SEARCH_NO_CHECK_PERM) &&
 	    key_task_permission(make_key_ref(key, ctx->possessed),
-				ctx->cred, KEY_SEARCH) < 0) {
+				ctx->cred, KEY_NEED_SEARCH) < 0) {
 		ctx->result = ERR_PTR(-EACCES);
 		kleave(" = %d [!perm]", ctx->skipped_ret);
 		goto skipped;
@@ -691,8 +690,8 @@ descend_to_node:
 		smp_read_barrier_depends();
 		ptr = ACCESS_ONCE(shortcut->next_node);
 		BUG_ON(!assoc_array_ptr_is_node(ptr));
-		node = assoc_array_ptr_to_node(ptr);
 	}
+	node = assoc_array_ptr_to_node(ptr);
 
 begin_node:
 	kdebug("begin_node");
@@ -722,7 +721,7 @@ ascend_to_node:
 		/* Search a nested keyring */
 		if (!(ctx->flags & KEYRING_SEARCH_NO_CHECK_PERM) &&
 		    key_task_permission(make_key_ref(key, ctx->possessed),
-					ctx->cred, KEY_SEARCH) < 0)
+					ctx->cred, KEY_NEED_SEARCH) < 0)
 			continue;
 
 		/* stack the current position */
@@ -844,7 +843,7 @@ key_ref_t keyring_search_aux(key_ref_t keyring_ref,
 		return ERR_PTR(-ENOTDIR);
 
 	if (!(ctx->flags & KEYRING_SEARCH_NO_CHECK_PERM)) {
-		err = key_task_permission(keyring_ref, ctx->cred, KEY_SEARCH);
+		err = key_task_permission(keyring_ref, ctx->cred, KEY_NEED_SEARCH);
 		if (err < 0)
 			return ERR_PTR(err);
 	}
@@ -974,7 +973,7 @@ struct key *find_keyring_by_name(const char *name, bool skip_perm_check)
 
 			if (!skip_perm_check &&
 			    key_permission(make_key_ref(keyring, 0),
-					   KEY_SEARCH) < 0)
+					   KEY_NEED_SEARCH) < 0)
 				continue;
 
 			/* we've got a match but we might end up racing with
@@ -1001,7 +1000,11 @@ static int keyring_detect_cycle_iterator(const void *object,
 
 	kenter("{%d}", key->serial);
 
-	BUG_ON(key != ctx->match_data);
+	/* We might get a keyring with matching index-key that is nonetheless a
+	 * different keyring. */
+	if (key != ctx->match_data)
+		return 0;
+
 	ctx->result = ERR_PTR(-EDEADLK);
 	return 1;
 }

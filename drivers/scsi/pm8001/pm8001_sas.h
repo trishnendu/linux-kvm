@@ -466,6 +466,10 @@ struct pm8001_hba_memspace {
 	u64			membase;
 	u32			memsize;
 };
+struct isr_param {
+	struct pm8001_hba_info *drv_inst;
+	u32 irq_id;
+};
 struct pm8001_hba_info {
 	char			name[PM8001_NAME_LENGTH];
 	struct list_head	list;
@@ -519,14 +523,13 @@ struct pm8001_hba_info {
 	int			number_of_intr;/*will be used in remove()*/
 #endif
 #ifdef PM8001_USE_TASKLET
-	struct tasklet_struct	tasklet;
+	struct tasklet_struct	tasklet[PM8001_MAX_MSIX_VEC];
 #endif
 	u32			logging_level;
 	u32			fw_status;
 	u32			smp_exp_mode;
-	u32			int_vector;
 	const struct firmware 	*fw_image;
-	u8			outq[PM8001_MAX_MSIX_VEC];
+	struct isr_param irq_vector[PM8001_MAX_MSIX_VEC];
 };
 
 struct pm8001_work {
@@ -704,6 +707,18 @@ ssize_t pm80xx_get_fatal_dump(struct device *cdev,
 ssize_t pm8001_get_gsm_dump(struct device *cdev, u32, char *buf);
 /* ctl shared API */
 extern struct device_attribute *pm8001_host_attrs[];
+
+static inline void
+pm8001_ccb_task_free_done(struct pm8001_hba_info *pm8001_ha,
+			struct sas_task *task, struct pm8001_ccb_info *ccb,
+			u32 ccb_idx)
+{
+	pm8001_ccb_task_free(pm8001_ha, task, ccb, ccb_idx);
+	smp_mb(); /*in order to force CPU ordering*/
+	spin_unlock(&pm8001_ha->lock);
+	task->task_done(task);
+	spin_lock(&pm8001_ha->lock);
+}
 
 #endif
 

@@ -356,7 +356,8 @@ xfs_compat_attrlist_by_handle(
 	if (copy_from_user(&al_hreq, arg,
 			   sizeof(compat_xfs_fsop_attrlist_handlereq_t)))
 		return -XFS_ERROR(EFAULT);
-	if (al_hreq.buflen > XATTR_LIST_MAX)
+	if (al_hreq.buflen < sizeof(struct attrlist) ||
+	    al_hreq.buflen > XATTR_LIST_MAX)
 		return -XFS_ERROR(EINVAL);
 
 	/*
@@ -423,10 +424,11 @@ xfs_compat_attrmulti_by_handle(
 
 	ops = memdup_user(compat_ptr(am_hreq.ops), size);
 	if (IS_ERR(ops)) {
-		error = PTR_ERR(ops);
+		error = -PTR_ERR(ops);
 		goto out_dput;
 	}
 
+	error = ENOMEM;
 	attr_name = kmalloc(MAXNAMELEN, GFP_KERNEL);
 	if (!attr_name)
 		goto out_kfree_ops;
@@ -437,7 +439,7 @@ xfs_compat_attrmulti_by_handle(
 				compat_ptr(ops[i].am_attrname),
 				MAXNAMELEN);
 		if (ops[i].am_error == 0 || ops[i].am_error == MAXNAMELEN)
-			error = -ERANGE;
+			error = ERANGE;
 		if (ops[i].am_error < 0)
 			break;
 
