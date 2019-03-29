@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
@@ -751,7 +752,6 @@ static void virtio_p9_remove(struct p9_dev *p9dev,
 
 	virtio_p9_pdu_readf(pdu, "d", &fid_val);
 	fid = get_fid(p9dev, fid_val);
-
 	ret = remove(fid->abs_path);
 	if (ret < 0)
 		goto err_out;
